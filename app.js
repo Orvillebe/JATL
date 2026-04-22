@@ -94,6 +94,16 @@ const Helpers = (() => {
 const Register = (() => {
   const { $, $$, toast, getWeekDates, formatDate, formatDateShort, formatWeekLabel, parseTime, formatHours } = Helpers;
 
+  let editingIds = null;
+
+  function clearEditMode() {
+    editingIds = null;
+    const btn = $('#btnSaveEntry');
+    btn.textContent = 'Opslaan';
+    btn.classList.remove('btn-editing');
+    $$('.entry-row').forEach(r => r.classList.remove('entry-editing'));
+  }
+
   async function populateDropdowns(weekOffset) {
     const customers = await DataService.getCustomers();
     const phases = await DataService.getPhases();
@@ -162,12 +172,6 @@ const Register = (() => {
     for (let i = 0; i < dayInputs.length; i++) {
       const minutes = parseTime(dayInputs[i].value);
       if (!minutes || minutes <= 0) continue;
-
-      await DataService.addEntry({
-        memberId, customerId, projectId, phase,
-        date: formatDate(dates[i]),
-        minutes, note
-      });
       totalSaved += minutes;
     }
 
@@ -176,6 +180,24 @@ const Register = (() => {
       return;
     }
 
+    // Delete old entries only after we confirmed there's new data
+    if (editingIds) {
+      for (const id of editingIds) await DataService.removeEntry(id);
+    }
+
+    // Create new entries
+    for (let i = 0; i < dayInputs.length; i++) {
+      const minutes = parseTime(dayInputs[i].value);
+      if (!minutes || minutes <= 0) continue;
+
+      await DataService.addEntry({
+        memberId, customerId, projectId, phase,
+        date: formatDate(dates[i]),
+        minutes, note
+      });
+    }
+
+    clearEditMode();
     DataService.setRecentProject({ customerId, projectId, phase });
 
     dayInputs.forEach(inp => inp.value = '');
@@ -243,6 +265,7 @@ const Register = (() => {
 
     container.querySelectorAll('.week-chip').forEach(chip => {
       chip.addEventListener('click', async () => {
+        clearEditMode();
         $('#entryCustomer').value = chip.dataset.customer;
         await updateProjectDropdown();
         $('#entryProject').value = chip.dataset.project;
@@ -280,7 +303,7 @@ const Register = (() => {
       for (const e of grouped) {
         const proj = projects.find(p => p.id === e.projectId);
         const cust = customers.find(c => c.id === e.customerId);
-        html += `<div class="entry-row" data-entry-ids="${e.ids.join(',')}" data-minutes="${e.minutes}">
+        html += `<div class="entry-row" data-entry-ids="${e.ids.join(',')}" data-minutes="${e.minutes}" data-customer="${e.customerId}" data-project="${e.projectId}" data-phase="${e.phase || ''}" data-note="${(e.note || '').replace(/"/g, '&quot;')}" data-date="${e.date}">
           <div class="entry-project">
             <div class="entry-project-name">${proj?.name || '?'}</div>
             <div class="entry-project-detail">${cust?.name || '?'}${e.phase ? ' / ' + e.phase : ''}${e.note ? ' / ' + e.note : ''}</div>
@@ -319,13 +342,90 @@ const Register = (() => {
         evt.stopPropagation();
         const ids = btn.dataset.ids.split(',');
         for (const id of ids) await DataService.removeEntry(id);
+        clearEditMode();
         renderWeek(weekOffset, memberId);
       });
     });
 
     container.querySelectorAll('.entry-row[data-entry-ids]').forEach(row => {
       row.style.cursor = 'pointer';
+      let pressTimer = null;
+      let longPressed = false;
+
+      const startPress = (evt) => {
+        longPressed = false;
+        pressTimer = setTimeout(async () => {
+          longPressed = true;
+          // Long press: fill form for full edit
+          const ids = row.dataset.entryIds.split(',');
+          const dates = getWeekDates(weekOffset);
+
+          $('#entryCustomer').value = row.dataset.customer;
+          await updateProjectDropdown();
+          $('#entryProject').value = row.dataset.project;
+          $('#entryPhase').value = row.dataset.phase;
+
+          // Fill note
+          const note = row.dataset.note || '';
+          if (note) {
+            $('#noteField').classList.add('visible');
+            $('#noteToggle').textContent = '- notitie';
+            $('#entryNote').value = note;
+          } else {
+            $('#noteField').classList.remove('visible');
+            $('#noteToggle').textContent = '+ notitie';
+            $('#entryNote').value = '';
+          }
+
+          // Fill hours in correct day column
+          $$('.day-input').forEach(inp => inp.value = '');
+          const entryDate = row.dataset.date;
+          const dayIndex = dates.findIndex(d => formatDate(d) === entryDate);
+          if (dayIndex >= 0) {
+            const mins = parseInt(row.dataset.minutes);
+            const h = Math.floor(mins / 60);
+            const m = mins % 60;
+            $$('.day-input')[dayIndex].value = m === 0 ? `${h}` : `${h}:${String(m).padStart(2, '0')}`;
+          }
+
+          // Set edit mode
+          editingIds = ids;
+          $$('.entry-row').forEach(r => r.classList.remove('entry-editing'));
+          row.classList.add('entry-editing');
+          const btn = $('#btnSaveEntry');
+          btn.textContent = 'Bewerken opslaan';
+          btn.classList.add('btn-editing');
+
+          $('.quick-entry').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 500);
+      };
+
+      const cancelPress = () => {
+        clearTimeout(pressTimer);
+      };
+
+      const endPress = (evt) => {
+        clearTimeout(pressTimer);
+        if (longPressed) {
+          evt.preventDefault();
+          evt.stopPropagation();
+          return;
+        }
+      };
+
+      // Touch events
+      row.addEventListener('touchstart', startPress, { passive: true });
+      row.addEventListener('touchmove', cancelPress);
+      row.addEventListener('touchend', endPress);
+
+      // Mouse events
+      row.addEventListener('mousedown', startPress);
+      row.addEventListener('mousemove', cancelPress);
+      row.addEventListener('mouseup', endPress);
+
+      // Short click: inline hour edit
       row.addEventListener('click', (evt) => {
+        if (longPressed) return;
         if (evt.target.closest('.entry-delete')) return;
         const hoursEl = row.querySelector('.entry-hours');
         if (hoursEl.querySelector('input')) return;
@@ -388,12 +488,14 @@ const Register = (() => {
     $('#btnSaveEntry').addEventListener('click', () => saveEntry(getWeekOffset(), getMemberId()));
 
     $('#weekPrev').addEventListener('click', () => {
+      clearEditMode();
       onWeekChange(-1);
       renderWeek(getWeekOffset(), getMemberId());
       highlightToday(getWeekOffset());
     });
 
     $('#weekNext').addEventListener('click', () => {
+      clearEditMode();
       onWeekChange(1);
       renderWeek(getWeekOffset(), getMemberId());
       highlightToday(getWeekOffset());
