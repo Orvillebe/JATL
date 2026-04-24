@@ -391,6 +391,10 @@ const Register = (() => {
     });
   }
 
+  function closeContextMenu() {
+    document.querySelectorAll('.context-menu').forEach(m => m.remove());
+  }
+
   function bindEntryActions(container, weekOffset, memberId) {
     container.querySelectorAll('.entry-swipe').forEach(wrapper => {
       const row = wrapper.querySelector('.entry-row');
@@ -433,72 +437,89 @@ const Register = (() => {
         }
       });
 
-      // --- Double click (desktop) ---
-      row.addEventListener('dblclick', (evt) => {
+      // --- Right-click context menu (desktop) ---
+      row.addEventListener('contextmenu', (evt) => {
         evt.preventDefault();
         closeAllSwipes(container);
-        fillFormForEdit(wrapper, weekOffset);
+        closeContextMenu();
+
+        const menu = document.createElement('div');
+        menu.className = 'context-menu';
+        menu.innerHTML = `
+          <button class="context-menu-item context-menu-edit">Bewerken</button>
+          <button class="context-menu-item context-menu-delete">Verwijder</button>
+        `;
+        menu.style.top = `${evt.clientY}px`;
+        menu.style.left = `${evt.clientX}px`;
+        document.body.appendChild(menu);
+
+        menu.querySelector('.context-menu-edit').addEventListener('click', () => {
+          closeContextMenu();
+          fillFormForEdit(wrapper, weekOffset);
+        });
+
+        menu.querySelector('.context-menu-delete').addEventListener('click', async () => {
+          closeContextMenu();
+          const ids = wrapper.dataset.entryIds.split(',');
+          for (const id of ids) await DataService.removeEntry(id);
+          clearEditMode();
+          renderWeek(weekOffset, memberId);
+        });
+
+        setTimeout(() => {
+          document.addEventListener('click', closeContextMenu, { once: true });
+        }, 0);
       });
 
       // --- Single click: inline hour edit ---
-      let clickTimer = null;
       row.addEventListener('click', (evt) => {
         if (swiping) { swiping = false; return; }
         if (wrapper.classList.contains('swiped-left') || wrapper.classList.contains('swiped-right')) return;
 
-        if (clickTimer) {
-          clearTimeout(clickTimer);
-          clickTimer = null;
-          return; // double click handled by dblclick
-        }
+        const hoursEl = row.querySelector('.entry-hours');
+        if (hoursEl.querySelector('input')) return;
 
-        clickTimer = setTimeout(() => {
-          clickTimer = null;
-          const hoursEl = row.querySelector('.entry-hours');
-          if (hoursEl.querySelector('input')) return;
+        const currentMinutes = wrapper.dataset.minutes;
+        const entryIds = wrapper.dataset.entryIds.split(',');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'numeric';
+        const mins = parseInt(currentMinutes);
+        const editH = Math.floor(mins / 60);
+        const editM = mins % 60;
+        input.value = editM === 0 ? `${editH}` : `${editH}:${String(editM).padStart(2, '0')}`;
+        input.className = 'entry-hours-edit';
+        hoursEl.textContent = '';
+        hoursEl.appendChild(input);
+        input.focus();
+        input.select();
 
-          const currentMinutes = wrapper.dataset.minutes;
-          const entryIds = wrapper.dataset.entryIds.split(',');
-          const input = document.createElement('input');
-          input.type = 'text';
-          input.inputMode = 'numeric';
-          const mins = parseInt(currentMinutes);
-          const editH = Math.floor(mins / 60);
-          const editM = mins % 60;
-          input.value = editM === 0 ? `${editH}` : `${editH}:${String(editM).padStart(2, '0')}`;
-          input.className = 'entry-hours-edit';
-          hoursEl.textContent = '';
-          hoursEl.appendChild(input);
-          input.focus();
-          input.select();
+        const save = async () => {
+          const newMinutes = parseTime(input.value);
+          if (newMinutes && newMinutes > 0 && newMinutes !== parseInt(currentMinutes)) {
+            const original = await DataService.getEntries({ memberId });
+            const source = original.find(e => e.id === entryIds[0]);
+            for (const id of entryIds) await DataService.removeEntry(id);
+            await DataService.addEntry({
+              memberId: source.memberId,
+              customerId: source.customerId,
+              projectId: source.projectId,
+              phase: source.phase,
+              date: source.date,
+              minutes: newMinutes,
+              note: source.note
+            });
+            renderWeek(weekOffset, memberId);
+          } else {
+            hoursEl.textContent = formatHours(parseInt(currentMinutes));
+          }
+        };
 
-          const save = async () => {
-            const newMinutes = parseTime(input.value);
-            if (newMinutes && newMinutes > 0 && newMinutes !== parseInt(currentMinutes)) {
-              const original = await DataService.getEntries({ memberId });
-              const source = original.find(e => e.id === entryIds[0]);
-              for (const id of entryIds) await DataService.removeEntry(id);
-              await DataService.addEntry({
-                memberId: source.memberId,
-                customerId: source.customerId,
-                projectId: source.projectId,
-                phase: source.phase,
-                date: source.date,
-                minutes: newMinutes,
-                note: source.note
-              });
-              renderWeek(weekOffset, memberId);
-            } else {
-              hoursEl.textContent = formatHours(parseInt(currentMinutes));
-            }
-          };
-
-          input.addEventListener('blur', save);
-          input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') input.blur();
-            if (e.key === 'Escape') { hoursEl.textContent = formatHours(parseInt(currentMinutes)); }
-          });
-        }, 250);
+        input.addEventListener('blur', save);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') input.blur();
+          if (e.key === 'Escape') { hoursEl.textContent = formatHours(parseInt(currentMinutes)); }
+        });
       });
 
       // --- Swipe action buttons ---
