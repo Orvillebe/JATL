@@ -434,13 +434,20 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
   transition: transform 0.2s;
 }
 
-.entry-actions {
+.entry-actions, .entry-action-left, .entry-action-right {
   position: absolute;
-  right: 0;
   top: 0;
   bottom: 0;
   display: flex;
   align-items: stretch;
+}
+
+.entry-action-right {
+  right: 0;
+}
+
+.entry-action-left {
+  left: 0;
 }
 
 .entry-action {
@@ -456,6 +463,10 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 .entry-action-edit {
   background: var(--accent);
   color: var(--bg);
+}
+
+.entry-action-delete {
+  background: var(--danger);
 }
 
 .entry-project {
@@ -486,19 +497,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
   background: var(--accent-dim);
   border-radius: var(--radius-sm);
 }
-
-.entry-delete {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px;
-  font-size: 16px;
-  line-height: 1;
-  opacity: 0.4;
-  transition: opacity 0.15s;
-}
-.entry-delete:hover { opacity: 1; color: var(--danger); }
 
 .btn-editing {
   background: var(--surface) !important;
