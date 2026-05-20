@@ -65,6 +65,22 @@ create index entries_customer on entries(customer_id);
 create index entries_project on entries(project_id);
 
 -- =====================
+-- Data API Grants (required for projects created after May 30, 2026)
+-- =====================
+
+grant select, insert, update on public.members to authenticated;
+grant select, insert, delete on public.customers to authenticated;
+grant select, insert, delete on public.projects to authenticated;
+grant select, insert, delete on public.phases to authenticated;
+grant select, insert, update, delete on public.entries to authenticated;
+
+grant select, insert, update, delete on public.members to service_role;
+grant select, insert, update, delete on public.customers to service_role;
+grant select, insert, update, delete on public.projects to service_role;
+grant select, insert, update, delete on public.phases to service_role;
+grant select, insert, update, delete on public.entries to service_role;
+
+-- =====================
 -- Row Level Security
 -- =====================
 
