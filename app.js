@@ -739,6 +739,18 @@ const Report = (() => {
       $(`#${id}`).addEventListener('change', update);
     });
 
+    // Manual date change: show "Aangepast"
+    ['reportFrom', 'reportTo'].forEach(id => {
+      $(`#${id}`).addEventListener('change', () => {
+        const sel = $('#reportPeriod');
+        if (!sel.querySelector('option[value="custom"]')) {
+          sel.insertAdjacentHTML('afterbegin', '<option value="custom">Aangepast</option>');
+        }
+        sel.value = 'custom';
+      });
+    });
+
+    // Customer change: filter projects
     $('#reportCustomer').addEventListener('change', async () => {
       await updateReportProjects();
     });
@@ -750,6 +762,49 @@ const Report = (() => {
       a.href = URL.createObjectURL(blob);
       a.download = `jatl-${formatDate(new Date())}.csv`;
       a.click();
+    });
+
+    // Period dropdown
+    $('#reportPeriod').addEventListener('change', () => {
+      const period = $('#reportPeriod').value;
+      if (period === 'custom') return;
+
+      const custom = $('#reportPeriod').querySelector('option[value="custom"]');
+      if (custom) custom.remove();
+
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      let from, to;
+
+      switch (period) {
+        case 'week':
+          const weekDates = getWeekDates(0);
+          from = formatDate(weekDates[0]);
+          to = formatDate(weekDates[6]);
+          break;
+        case 'month':
+          from = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+          to = formatDate(now);
+          break;
+        case 'quarter':
+          const qStart = m - (m % 3);
+          from = `${y}-${String(qStart + 1).padStart(2, '0')}-01`;
+          to = formatDate(now);
+          break;
+        case 'year':
+          from = `${y}-01-01`;
+          to = formatDate(now);
+          break;
+        case 'all':
+          from = '';
+          to = '';
+          break;
+      }
+
+      $('#reportFrom').value = from;
+      $('#reportTo').value = to;
+      update();
     });
   }
 

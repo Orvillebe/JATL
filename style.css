@@ -555,6 +555,10 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 
 /* ---- REPORT ---- */
 
+.period-select {
+  min-width: 110px;
+}
+
 .report-filters {
   display: flex;
   flex-wrap: wrap;
