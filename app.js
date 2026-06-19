@@ -588,17 +588,17 @@ const Report = (() => {
 
     $('#reportCustomer').innerHTML = '<option value="">Alle</option>' +
       customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-    $('#reportProject').innerHTML = '<option value="">Alle</option>' +
-      projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
     $('#reportMember').innerHTML = '<option value="">Iedereen</option>' +
       members.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
     $('#reportPhase').innerHTML = '<option value="">Alle</option>' +
       phases.map(p => `<option value="${p}">${p}</option>`).join('');
 
     $('#reportCustomer').value = prevCust;
-    $('#reportProject').value = prevProj;
     $('#reportMember').value = prevMember;
     $('#reportPhase').value = prevPhase;
+
+    await updateReportProjects();
+    $('#reportProject').value = prevProj;
 
     if (!$('#reportFrom').value) {
       const weekDates = getWeekDates(0);
@@ -607,6 +607,18 @@ const Report = (() => {
     }
 
     await update();
+  }
+
+  async function updateReportProjects() {
+    const customerId = $('#reportCustomer').value;
+    let projects;
+    if (customerId) {
+      projects = await DataService.getProjectsByCustomer(customerId);
+    } else {
+      projects = await DataService.getProjects();
+    }
+    $('#reportProject').innerHTML = '<option value="">Alle</option>' +
+      projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
   }
 
   function getFilters() {
@@ -725,6 +737,10 @@ const Report = (() => {
   function bindEvents() {
     ['reportFrom', 'reportTo', 'reportCustomer', 'reportProject', 'reportMember', 'reportPhase'].forEach(id => {
       $(`#${id}`).addEventListener('change', update);
+    });
+
+    $('#reportCustomer').addEventListener('change', async () => {
+      await updateReportProjects();
     });
 
     $('#btnExport').addEventListener('click', async () => {
