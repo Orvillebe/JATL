@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JATL · Backups vergelijken</title>
+<!--
+  JATL compare - checks that two backups hold the same data.
+
+  Responsibilities:
+    - Read two backups (before and after a migration or restore)
+    - Per table: count before, count after, and whether every old row is equal in every old column
+    - List the rows that differ, so you can see what happened
+
+  New columns (added by a migration) do not count. Runs in the browser only; nothing is sent anywhere.
+  Comparison logic lives in backup-core.js.
+-->
+<style>
+  :root {
+    --bg: #1b1b1f; --surface: #26262a; --border: #3e3e46;
+    --text: #F5F4F0; --text-muted: #b5b5b9; --accent: #c4c71e;
+    --danger: #c45c5c; --success: #5ca67a;
+    --radius: 10px; --radius-sm: 6px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); padding: 24px 16px 64px; line-height: 1.45; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 16px 0 8px; }
+  .lead { color: var(--text-muted); margin-bottom: 24px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+  .drop { background: var(--surface); border: 1.5px dashed var(--border); border-radius: var(--radius); padding: 18px; color: var(--text-muted); cursor: pointer; font-size: 14px; min-height: 96px; }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  .drop b { color: var(--text); }
+  .err { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--success); font-weight: 600; }
+  .bad { color: var(--danger); font-weight: 600; }
+  .verdict { margin: 20px 0 8px; font-size: 17px; }
+  .detail { font: 12px ui-monospace, Menlo, monospace; color: var(--text-muted); word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Backups vergelijken</h1>
+  <p class="lead">Zet een backup van vóór en een van na een migratie of restore naast elkaar. Alles gebeurt in je browser, er wordt niets verstuurd.</p>
+
+  <div class="pair">
+    <label class="drop" id="dropA"><input type="file" accept=".json,application/json"><b>Voor</b><br><span>Sleep hierheen of klik</span></label>
+    <label class="drop" id="dropB"><input type="file" accept=".json,application/json"><b>Na</b><br><span>Sleep hierheen of klik</span></label>
+  </div>
+
+  <div id="result"></div>
+</main>
+
+<script src="backup-core.js"></script>
+<script>
+  const { validateBackup, compareBackups, TABLES, KEYS } = JatlBackup;
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const NAMES = { customers: 'Klanten', projects: 'Projecten', phases: 'Fases', members: 'Leden', entries: 'Registraties' };
+  const MAX_DETAIL = 20;
+
+  const files = { A: null, B: null };
+
+  function bindDrop(slot) {
+    const el = $(`#drop${slot}`);
+    const label = el.querySelector('span');
+    const load = async file => {
+      try {
+        const b = JSON.parse(await file.text());
+        const v = validateBackup(b);
+        if (!v.ok) { files[slot] = null; label.innerHTML = `<span class="err">${v.errors.map(esc).join('<br>')}</span>`; }
+        else {
+          files[slot] = b;
+          label.innerHTML = `${esc(file.name)}<br>${esc(new Date(b.createdAt).toLocaleString('nl-BE'))} · versie ${esc(b.schemaVersion)}`;
+        }
+      } catch { files[slot] = null; label.innerHTML = '<span class="err">Geen leesbare JSON.</span>'; }
+      render();
+    };
+    el.querySelector('input').addEventListener('change', e => e.target.files[0] && load(e.target.files[0]));
+    el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('over'); e.dataTransfer.files[0] && load(e.dataTransfer.files[0]); });
+  }
+
+  function describe(row, t) {
+    if (t === 'entries') return `${row.date} · ${row.minutes} min · ${row.note || ''}`;
+    return row.name || row[KEYS[t]];
+  }
+
+  function render() {
+    if (!files.A || !files.B) { $('#result').innerHTML = ''; return; }
+    const r = compareBackups(files.A, files.B);
+    const allSame = TABLES.every(t => r[t].identical);
+
+    let html = `<p class="verdict ${allSame ? 'ok' : 'bad'}">${allSame
+      ? 'Alles gelijk. Elke rij van voor staat ongewijzigd in na.'
+      : 'Er zijn verschillen. Zie hieronder.'}</p>
+      <table><tr><th></th><th class="num">Voor</th><th class="num">Na</th><th class="num">Gewijzigd</th><th class="num">Verdwenen</th><th class="num">Nieuw</th><th></th></tr>`;
+    for (const t of TABLES) {
+      const x = r[t];
+      html += `<tr><td>${NAMES[t]}</td><td class="num">${x.before}</td><td class="num">${x.after}</td>
+        <td class="num">${x.changed.length}</td><td class="num">${x.missing.length}</td><td class="num">${x.added.length}</td>
+        <td class="${x.identical ? 'ok' : 'bad'}">${x.identical ? 'gelijk' : 'verschil'}</td></tr>`;
+    }
+    html += '</table>';
+
+    for (const t of TABLES) {
+      const x = r[t];
+      if (x.identical) continue;
+      html += `<h2>${NAMES[t]}</h2>`;
+      const lines = [
+        ...x.missing.map(row => `Verdwenen: ${esc(describe(row, t))} <span class="detail">${esc(row[KEYS[t]])}</span>`),
+        ...x.changed.map(c => `Gewijzigd (${esc(c.cols.join(', '))}): ${esc(describe(c.before, t))} → ${esc(describe(c.after, t))} <span class="detail">${esc(c.key)}</span>`),
+        ...x.added.map(row => `Nieuw: ${esc(describe(row, t))} <span class="detail">${esc(row[KEYS[t]])}</span>`)
+      ];
+      html += lines.slice(0, MAX_DETAIL).map(l => `<div style="font-size:14px;margin-bottom:4px">${l}</div>`).join('');
+      if (lines.length > MAX_DETAIL) html += `<div class="detail">… en nog ${lines.length - MAX_DETAIL}</div>`;
+    }
+    $('#result').innerHTML = html;
+  }
+
+  bindDrop('A');
+  bindDrop('B');
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "jatl-mock", "runtimeExecutable": "node", "runtimeArgs": ["tests/mock/serve.js"], "port": 5174 }
+  ]
+}

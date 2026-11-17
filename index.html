@@ -9,7 +9,8 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<!-- Bump ?v= on every release so phones load the new files instead of a cached copy. -->
+<link rel="stylesheet" href="style.css?v=2026.11.17">
 </head>
 <body>
 
@@ -188,6 +189,12 @@
           <button class="btn btn-small" id="btnAddPhase">+</button>
         </div>
       </div>
+
+      <div class="manage-section">
+        <div class="manage-section-title">Backup</div>
+        <div class="manage-section-hint">Alle klanten, projecten, fases, leden en registraties als één bestand. Bewaar het buiten Supabase: het gratis plan maakt zelf geen backups.</div>
+        <button class="btn btn-subtle" id="btnBackup">Backup downloaden</button>
+      </div>
     </div>
   </div>
 
@@ -210,8 +217,10 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="data-service.js"></script>
-<script src="app.js"></script>
+<!-- Fixed version + hash: the browser refuses the file if jsdelivr ever serves something else. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"
+  integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
+<script src="data-service.js?v=2026.11.17"></script>
+<script src="app.js?v=2026.11.17"></script>
 </body>
 </html>

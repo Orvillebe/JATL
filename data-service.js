@@ -1,15 +1,38 @@
 /**
  * JATL Data Service - Supabase implementation with Auth
  *
+ * Responsibilities:
+ *   - All reads and writes to the database (app.js never talks to Supabase directly)
+ *   - Paging past the 1000-row limit of the Supabase API (fetchAll)
+ *   - Backup export (all tables as JSON) and CSV export
+ *
  * Replace the two values below with your Supabase project details.
  * Find them at: Supabase Dashboard > Settings > API
  */
+
+// Schema version this code expects. 0 = schema.sql as it was before migrations/.
+// A backup carries this number; tools/restore.html refuses a mismatch.
+const JATL_SCHEMA_VERSION = 0;
 
 const SUPABASE_URL = 'https://pqbxqsunkbuvxlvvjbnp.supabase.co';       // e.g. https://xxxxx.supabase.co
 const SUPABASE_ANON_KEY = 'sb_publishable_P_C445o2GHbvR1rYnJFPBQ_6DRvQBF8';       // e.g. eyJhbGciOi...
 
 const DataService = (() => {
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // The Supabase API returns at most 1000 rows per request (project setting "Max rows").
+  // fetchAll keeps asking for the next page until a page comes back short.
+  // makeQuery must build a fresh, fully ordered query each time (end the order on a unique column).
+  const PAGE = 1000;
+  async function fetchAll(makeQuery) {
+    const rows = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await makeQuery().range(from, from + PAGE - 1);
+      if (error) throw error;
+      rows.push(...data);
+      if (data.length < PAGE) return rows;
+    }
+  }
 
   // =====================
   // AUTH
@@ -131,19 +154,19 @@ const DataService = (() => {
   // =====================
 
   async function getEntries(filters = {}) {
-    let q = supabase.from('entries').select('*');
+    const data = await fetchAll(() => {
+      let q = supabase.from('entries').select('*');
 
-    if (filters.memberId) q = q.eq('member_id', filters.memberId);
-    if (filters.customerId) q = q.eq('customer_id', filters.customerId);
-    if (filters.projectId) q = q.eq('project_id', filters.projectId);
-    if (filters.phase) q = q.eq('phase', filters.phase);
-    if (filters.dateFrom) q = q.gte('date', filters.dateFrom);
-    if (filters.dateTo) q = q.lte('date', filters.dateTo);
+      if (filters.memberId) q = q.eq('member_id', filters.memberId);
+      if (filters.customerId) q = q.eq('customer_id', filters.customerId);
+      if (filters.projectId) q = q.eq('project_id', filters.projectId);
+      if (filters.phase) q = q.eq('phase', filters.phase);
+      if (filters.dateFrom) q = q.gte('date', filters.dateFrom);
+      if (filters.dateTo) q = q.lte('date', filters.dateTo);
 
-    q = q.order('date', { ascending: false }).order('created_at', { ascending: false });
-
-    const { data, error } = await q;
-    if (error) throw error;
+      // id last, so paging is stable when date and created_at are equal
+      return q.order('date', { ascending: false }).order('created_at', { ascending: false }).order('id');
+    });
 
     return data.map(r => ({
       id: r.id,
@@ -257,6 +280,38 @@ const DataService = (() => {
   // EXPORT
   // =====================
 
+  // Backup: every table, raw database rows (snake_case), so restore.html can put them back as they were.
+  // Every signed-in user can read every table (see schema.sql), so any user's backup is complete.
+  async function exportBackup() {
+    const tables = {
+      members:   await fetchAll(() => supabase.from('members').select('*').order('id')),
+      customers: await fetchAll(() => supabase.from('customers').select('*').order('id')),
+      projects:  await fetchAll(() => supabase.from('projects').select('*').order('id')),
+      phases:    await fetchAll(() => supabase.from('phases').select('*').order('name')),
+      entries:   await fetchAll(() => supabase.from('entries').select('*').order('id'))
+    };
+    const session = await getSession();
+    const counts = Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length]));
+    return {
+      app: 'JATL',
+      kind: 'backup',
+      schemaVersion: JATL_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      createdBy: session?.user?.email || '',
+      source: SUPABASE_URL,
+      counts,
+      tables
+    };
+  }
+
+  // One CSV field: always quoted, quotes doubled, and a leading ' before = + - @
+  // so Excel does not read the field as a formula.
+  function csvField(v) {
+    let s = String(v ?? '');
+    if (/^[=+\-@]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+
   async function exportCSV(filters = {}) {
     const entries = await getEntries(filters);
     const members = await getMembers();
@@ -268,10 +323,10 @@ const DataService = (() => {
       const member = members.find(m => m.id === e.memberId)?.name || '';
       const customer = customers.find(c => c.id === e.customerId)?.name || '';
       const project = projects.find(p => p.id === e.projectId)?.name || '';
-      const note = `"${(e.note || '').replace(/"/g, '""')}"`;
       const h = Math.floor(e.minutes / 60);
       const m = e.minutes % 60;
-      return `${e.date},${member},${customer},${project},${e.phase},${h}:${String(m).padStart(2,'0')},${e.minutes},${note}`;
+      return [e.date, member, customer, project, e.phase, `${h}:${String(m).padStart(2,'0')}`, e.minutes, e.note]
+        .map(csvField).join(',');
     });
 
     return [header, ...rows].join('\n');
@@ -290,6 +345,6 @@ const DataService = (() => {
     getEntries, addEntry, updateEntry, removeEntry,
     getReport,
     getRecentProject, setRecentProject,
-    exportCSV
+    exportCSV, exportBackup, csvField
   };
 })();

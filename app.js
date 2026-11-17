@@ -17,11 +17,32 @@ const Helpers = (() => {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  function toast(msg) {
+  let toastTimer = null;
+  function toast(msg, ms = 2000) {
     const el = $('#toast');
     el.textContent = msg;
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 2000);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  // Escape text before it goes into innerHTML or an attribute.
+  // Same function as JAPT `UI.esc`. Use it around every name, note and phase.
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // The one place where failed saves and deletes surface.
+  // Returns the result of fn (or true when fn returns nothing), or null when it failed.
+  // Callers only clear what the user typed when act() did not return null.
+  async function act(fn, failMsg = 'Bewaren lukte niet. Probeer opnieuw.') {
+    try {
+      const result = await fn();
+      return result === undefined ? true : result;
+    } catch (e) {
+      console.error(e);
+      toast(e?.code === '23503' ? 'Er staan nog uren op. Zet hem op inactief.' : failMsg, 4000);
+      return null;
+    }
   }
 
   function getWeekDates(offset = 0) {
@@ -83,7 +104,19 @@ const Helpers = (() => {
     return `${h}u${String(m).padStart(2, '0')}`;
   }
 
-  return { $, $$, toast, getWeekDates, formatDate, formatDateShort, formatWeekLabel, parseTime, formatHours };
+  // Hand the user a file to save (CSV export, backup).
+  function download(text, type, filename) {
+    const blob = new Blob([text], { type });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  return { $, $$, toast, esc, act, download, getWeekDates, formatDate, formatDateShort, formatWeekLabel, parseTime, formatHours };
 })();
 
 
@@ -92,7 +125,7 @@ const Helpers = (() => {
    ============================================= */
 
 const Register = (() => {
-  const { $, $$, toast, getWeekDates, formatDate, formatDateShort, formatWeekLabel, parseTime, formatHours } = Helpers;
+  const { $, $$, toast, esc, act, getWeekDates, formatDate, formatDateShort, formatWeekLabel, parseTime, formatHours } = Helpers;
 
   let editingIds = null;
 
@@ -110,11 +143,11 @@ const Register = (() => {
 
     const custSel = $('#entryCustomer');
     custSel.innerHTML = '<option value="">Kies...</option>' +
-      customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      customers.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
 
     if (phases.length > 0) {
       $('#phaseRow').style.display = '';
-      $('#entryPhase').innerHTML = phases.map(p => `<option value="${p}">${p}</option>`).join('');
+      $('#entryPhase').innerHTML = phases.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
     } else {
       $('#phaseRow').style.display = 'none';
       $('#entryPhase').innerHTML = '';
@@ -151,7 +184,29 @@ const Register = (() => {
     }
     const projects = await DataService.getProjectsByCustomer(customerId);
     projSel.innerHTML = '<option value="">Kies...</option>' +
-      projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+      projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  }
+
+  // Replace entries without losing hours when a step fails (release 1; release 2 uses replace_entries).
+  // 1. Add the new rows. 2. Only then remove the old ones.
+  // If an add fails, the rows added so far are removed again, so a retry starts clean.
+  // If a remove fails, the new rows stay and the old ones that remain are visible in the week.
+  // Returns true when everything went through.
+  async function addThenRemove(newRows, oldIds) {
+    const added = [];
+    const addOk = await act(async () => {
+      for (const r of newRows) added.push((await DataService.addEntry(r)).id);
+    }, 'Bewaren lukte niet. Je invoer staat er nog. Probeer opnieuw.');
+    if (addOk === null) {
+      const undone = await act(async () => {
+        for (const id of added) await DataService.removeEntry(id);
+      }, 'Bewaren lukte maar deels, en terugdraaien ook niet. Controleer de week voor je opnieuw bewaart.');
+      return false;
+    }
+    const removeOk = await act(async () => {
+      for (const id of oldIds) await DataService.removeEntry(id);
+    }, 'De nieuwe uren staan erin, maar de oude konden niet weg. Controleer de week en verwijder wat dubbel staat.');
+    return removeOk !== null;
   }
 
   async function saveEntry(weekOffset, memberId) {
@@ -180,21 +235,21 @@ const Register = (() => {
       return;
     }
 
-    // Delete old entries only after we confirmed there's new data
-    if (editingIds) {
-      for (const id of editingIds) await DataService.removeEntry(id);
-    }
-
-    // Create new entries
+    // Add the new entries first, remove the old ones only after all adds succeeded.
+    // On failure, take back what this attempt added, so trying again does not double hours.
+    // Release 2 replaces this with one database transaction (replace_entries).
+    const oldIds = editingIds;
+    const rows = [];
     for (let i = 0; i < dayInputs.length; i++) {
       const minutes = parseTime(dayInputs[i].value);
-      if (!minutes || minutes <= 0) continue;
+      if (minutes > 0) rows.push({ memberId, customerId, projectId, phase, date: formatDate(dates[i]), minutes, note });
+    }
+    const ok = await addThenRemove(rows, oldIds || []);
 
-      await DataService.addEntry({
-        memberId, customerId, projectId, phase,
-        date: formatDate(dates[i]),
-        minutes, note
-      });
+    if (!ok) {
+      // Keep what the user typed; show the week as it is now in the database.
+      renderWeek(weekOffset, memberId);
+      return;
     }
 
     clearEditMode();
@@ -210,7 +265,8 @@ const Register = (() => {
     btn.textContent = '✓ Opgeslagen';
     setTimeout(() => {
       btn.classList.remove('btn-saved');
-      btn.textContent = 'Opslaan';
+      // Do not overwrite "Bewerken opslaan" when the user started editing within these 1.5 s.
+      if (!editingIds) btn.textContent = 'Opslaan';
     }, 1500);
 
     renderWeek(weekOffset, memberId);
@@ -256,9 +312,9 @@ const Register = (() => {
     container.innerHTML = Object.values(summaryMap).map(s => {
       const proj = projects.find(p => p.id === s.projectId);
       const cust = customers.find(c => c.id === s.customerId);
-      return `<div class="week-chip" data-customer="${s.customerId}" data-project="${s.projectId}" data-phase="${s.phase}">
-        <div class="week-chip-project">${proj?.name || '?'}</div>
-        <div class="week-chip-detail">${cust?.name || '?'}${s.phase ? ' / ' + s.phase : ''}</div>
+      return `<div class="week-chip" data-customer="${esc(s.customerId)}" data-project="${esc(s.projectId)}" data-phase="${esc(s.phase)}">
+        <div class="week-chip-project">${esc(proj?.name || '?')}</div>
+        <div class="week-chip-detail">${esc(cust?.name || '?')}${s.phase ? ' / ' + esc(s.phase) : ''}</div>
         <div class="week-chip-hours">${formatHours(s.minutes)}</div>
       </div>`;
     }).join('');
@@ -303,14 +359,14 @@ const Register = (() => {
       for (const e of grouped) {
         const proj = projects.find(p => p.id === e.projectId);
         const cust = customers.find(c => c.id === e.customerId);
-        html += `<div class="entry-swipe" data-entry-ids="${e.ids.join(',')}" data-minutes="${e.minutes}" data-customer="${e.customerId}" data-project="${e.projectId}" data-phase="${e.phase || ''}" data-note="${(e.note || '').replace(/"/g, '&quot;')}" data-date="${e.date}">
+        html += `<div class="entry-swipe" data-entry-ids="${esc(e.ids.join(','))}" data-minutes="${e.minutes}" data-customer="${esc(e.customerId)}" data-project="${esc(e.projectId)}" data-phase="${esc(e.phase)}" data-note="${esc(e.note)}" data-date="${esc(e.date)}">
           <div class="entry-action-left">
             <button class="entry-action entry-action-delete">Verwijder</button>
           </div>
           <div class="entry-row">
             <div class="entry-project">
-              <div class="entry-project-name">${proj?.name || '?'}</div>
-              <div class="entry-project-detail">${cust?.name || '?'}${e.phase ? ' / ' + e.phase : ''}${e.note ? ' / ' + e.note : ''}</div>
+              <div class="entry-project-name">${esc(proj?.name || '?')}</div>
+              <div class="entry-project-detail">${esc(cust?.name || '?')}${e.phase ? ' / ' + esc(e.phase) : ''}${e.note ? ' / ' + esc(e.note) : ''}</div>
             </div>
             <div class="entry-hours">${formatHours(e.minutes)}</div>
           </div>
@@ -461,7 +517,9 @@ const Register = (() => {
         menu.querySelector('.context-menu-delete').addEventListener('click', async () => {
           closeContextMenu();
           const ids = wrapper.dataset.entryIds.split(',');
-          for (const id of ids) await DataService.removeEntry(id);
+          await act(async () => {
+            for (const id of ids) await DataService.removeEntry(id);
+          }, 'Verwijderen lukte niet (of maar deels). Controleer de week.');
           clearEditMode();
           renderWeek(weekOffset, memberId);
         });
@@ -494,21 +552,27 @@ const Register = (() => {
         input.focus();
         input.select();
 
+        let cancelled = false;
         const save = async () => {
+          if (cancelled) return;
           const newMinutes = parseTime(input.value);
           if (newMinutes && newMinutes > 0 && newMinutes !== parseInt(currentMinutes)) {
-            const original = await DataService.getEntries({ memberId });
-            const source = original.find(e => e.id === entryIds[0]);
-            for (const id of entryIds) await DataService.removeEntry(id);
-            await DataService.addEntry({
-              memberId: source.memberId,
-              customerId: source.customerId,
-              projectId: source.projectId,
-              phase: source.phase,
-              date: source.date,
-              minutes: newMinutes,
-              note: source.note
-            });
+            // Add the replacement first, then remove the originals (see addThenRemove).
+            const original = await act(() => DataService.getEntries({ memberId, dateFrom: wrapper.dataset.date, dateTo: wrapper.dataset.date }),
+              'Laden lukte niet. Er is niets veranderd.');
+            const source = original?.find(e => e.id === entryIds[0]);
+            if (original && !source) toast('Deze registratie bestaat niet meer. Er is niets veranderd.', 4000);
+            if (source) {
+              await addThenRemove([{
+                memberId: source.memberId,
+                customerId: source.customerId,
+                projectId: source.projectId,
+                phase: source.phase,
+                date: source.date,
+                minutes: newMinutes,
+                note: source.note
+              }], entryIds);
+            }
             renderWeek(weekOffset, memberId);
           } else {
             hoursEl.textContent = formatHours(parseInt(currentMinutes));
@@ -518,7 +582,8 @@ const Register = (() => {
         input.addEventListener('blur', save);
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') input.blur();
-          if (e.key === 'Escape') { hoursEl.textContent = formatHours(parseInt(currentMinutes)); }
+          // Escape cancels: removing the input fires blur, which must not save.
+          if (e.key === 'Escape') { cancelled = true; hoursEl.textContent = formatHours(parseInt(currentMinutes)); }
         });
       });
 
@@ -530,7 +595,9 @@ const Register = (() => {
 
       wrapper.querySelector('.entry-action-delete').addEventListener('click', async () => {
         const ids = wrapper.dataset.entryIds.split(',');
-        for (const id of ids) await DataService.removeEntry(id);
+        await act(async () => {
+          for (const id of ids) await DataService.removeEntry(id);
+        }, 'Verwijderen lukte niet (of maar deels). Controleer de week.');
         clearEditMode();
         renderWeek(weekOffset, memberId);
       });
@@ -573,7 +640,7 @@ const Register = (() => {
    ============================================= */
 
 const Report = (() => {
-  const { $, getWeekDates, formatDate, formatHours } = Helpers;
+  const { $, esc, act, download, getWeekDates, formatDate, formatHours } = Helpers;
 
   async function render() {
     const customers = await DataService.getCustomers();
@@ -587,11 +654,11 @@ const Report = (() => {
     const prevPhase = $('#reportPhase').value;
 
     $('#reportCustomer').innerHTML = '<option value="">Alle</option>' +
-      customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      customers.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
     $('#reportMember').innerHTML = '<option value="">Iedereen</option>' +
-      members.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+      members.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
     $('#reportPhase').innerHTML = '<option value="">Alle</option>' +
-      phases.map(p => `<option value="${p}">${p}</option>`).join('');
+      phases.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
 
     $('#reportCustomer').value = prevCust;
     $('#reportMember').value = prevMember;
@@ -618,7 +685,7 @@ const Report = (() => {
       projects = await DataService.getProjects();
     }
     $('#reportProject').innerHTML = '<option value="">Alle</option>' +
-      projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+      projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   }
 
   function getFilters() {
@@ -670,7 +737,7 @@ const Report = (() => {
       const custTotal = custIndices.reduce((s, i) => s + allEntries[i].minutes, 0);
 
       html += `<div class="report-card">
-        <div class="report-card-title report-drillable" data-drill="${drillId}">${cust?.name || '?'} <span style="float:right">${formatHours(custTotal)}</span></div>
+        <div class="report-card-title report-drillable" data-drill="${drillId}">${esc(cust?.name || '?')} <span style="float:right">${formatHours(custTotal)}</span></div>
         <div class="report-drill" id="drill-${drillId}" data-indices="${custIndices.join(',')}" style="display:none"></div>`;
       drillId++;
 
@@ -681,7 +748,7 @@ const Report = (() => {
         const projTotal = projIndices.reduce((s, i) => s + allEntries[i].minutes, 0);
 
         html += `<div class="report-row report-row-project report-drillable" data-drill="${drillId}">
-          <span>${proj?.name || '?'}</span>
+          <span>${esc(proj?.name || '?')}</span>
           <span class="report-row-hours">${formatHours(projTotal)}</span>
         </div>
         <div class="report-drill" id="drill-${drillId}" data-indices="${projIndices.join(',')}" style="display:none"></div>`;
@@ -690,7 +757,7 @@ const Report = (() => {
         for (const [phase, data] of Object.entries(phases)) {
           if (!phase) continue;
           html += `<div class="report-row report-row-phase report-drillable" data-drill="${drillId}">
-            <span>${phase}</span>
+            <span>${esc(phase)}</span>
             <span class="report-row-hours">${formatHours(data.minutes)}</span>
           </div>
           <div class="report-drill" id="drill-${drillId}" data-indices="${data.indices.join(',')}" style="display:none"></div>`;
@@ -724,8 +791,8 @@ const Report = (() => {
           const proj = projects.find(p => p.id === e.projectId);
           const member = members.find(m => m.id === e.memberId);
           return `<div class="report-drill-row">
-            <span class="report-drill-date">${e.date.slice(5).replace('-', '/')}</span>
-            <span class="report-drill-info">${member?.name || '?'} / ${proj?.name || '?'}${e.phase ? ' / ' + e.phase : ''}${e.note ? ' / ' + e.note : ''}</span>
+            <span class="report-drill-date">${esc(e.date.slice(5).replace('-', '/'))}</span>
+            <span class="report-drill-info">${esc(member?.name || '?')} / ${esc(proj?.name || '?')}${e.phase ? ' / ' + esc(e.phase) : ''}${e.note ? ' / ' + esc(e.note) : ''}</span>
             <span class="report-drill-hours">${formatHours(e.minutes)}</span>
           </div>`;
         }).join('');
@@ -756,12 +823,9 @@ const Report = (() => {
     });
 
     $('#btnExport').addEventListener('click', async () => {
-      const csv = await DataService.exportCSV(getFilters());
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `jatl-${formatDate(new Date())}.csv`;
-      a.click();
+      const csv = await act(() => DataService.exportCSV(getFilters()), 'Export lukte niet. Probeer opnieuw.');
+      if (csv === null) return;
+      download(csv, 'text/csv', `jatl-${formatDate(new Date())}.csv`);
     });
 
     // Period dropdown
@@ -817,7 +881,7 @@ const Report = (() => {
    ============================================= */
 
 const Manage = (() => {
-  const { $ } = Helpers;
+  const { $, esc, act, download, toast } = Helpers;
 
   async function render() {
     const customers = await DataService.getCustomers();
@@ -826,16 +890,16 @@ const Manage = (() => {
 
     $('#manageCustomers').innerHTML = customers.map(c =>
       `<div class="manage-item">
-        <span>${c.name}</span>
-        <button class="btn btn-small btn-danger" data-remove-customer="${c.id}">&times;</button>
+        <span>${esc(c.name)}</span>
+        <button class="btn btn-small btn-danger" data-remove-customer="${esc(c.id)}">&times;</button>
       </div>`
     ).join('');
 
     $('#manageProjects').innerHTML = projects.map(p => {
       const cust = customers.find(c => c.id === p.customerId);
       return `<div class="manage-item">
-        <div><span>${p.name}</span><div class="manage-item-sub">${cust?.name || '?'}</div></div>
-        <button class="btn btn-small btn-danger" data-remove-project="${p.id}">&times;</button>
+        <div><span>${esc(p.name)}</span><div class="manage-item-sub">${esc(cust?.name || '?')}</div></div>
+        <button class="btn btn-small btn-danger" data-remove-project="${esc(p.id)}">&times;</button>
       </div>`;
     }).join('');
 
@@ -843,13 +907,13 @@ const Manage = (() => {
       ? '<div class="empty-state" style="padding:8px 0">Geen fases ingesteld</div>'
       : phases.map(p =>
         `<div class="manage-item">
-          <span>${p}</span>
-          <button class="btn btn-small btn-danger" data-remove-phase="${p}">&times;</button>
+          <span>${esc(p)}</span>
+          <button class="btn btn-small btn-danger" data-remove-phase="${esc(p)}">&times;</button>
         </div>`
       ).join('');
 
     $('#newProjectCustomer').innerHTML = '<option value="">Klant...</option>' +
-      customers.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      customers.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
 
     bindRemoveActions();
   }
@@ -872,7 +936,7 @@ const Manage = (() => {
         }
         if (!confirm(msg)) return;
 
-        await DataService.removeCustomer(id);
+        await act(() => DataService.removeCustomer(id), 'Verwijderen lukte niet.');
         render();
       });
     });
@@ -890,14 +954,14 @@ const Manage = (() => {
         }
         if (!confirm(msg)) return;
 
-        await DataService.removeProject(id);
+        await act(() => DataService.removeProject(id), 'Verwijderen lukte niet.');
         render();
       });
     });
 
     document.querySelectorAll('[data-remove-phase]').forEach(btn => {
       btn.addEventListener('click', async () => {
-        await DataService.removePhase(btn.dataset.removePhase);
+        await act(() => DataService.removePhase(btn.dataset.removePhase), 'Verwijderen lukte niet.');
         render();
         App.refreshDropdowns();
       });
@@ -908,7 +972,7 @@ const Manage = (() => {
     $('#btnAddCustomer').addEventListener('click', async () => {
       const name = $('#newCustomerName').value.trim();
       if (!name) return;
-      await DataService.addCustomer(name);
+      if (await act(() => DataService.addCustomer(name)) === null) return;
       $('#newCustomerName').value = '';
       render();
     });
@@ -917,7 +981,7 @@ const Manage = (() => {
       const customerId = $('#newProjectCustomer').value;
       const name = $('#newProjectName').value.trim();
       if (!customerId || !name) return;
-      await DataService.addProject(customerId, name);
+      if (await act(() => DataService.addProject(customerId, name)) === null) return;
       $('#newProjectName').value = '';
       render();
     });
@@ -925,10 +989,24 @@ const Manage = (() => {
     $('#btnAddPhase').addEventListener('click', async () => {
       const name = $('#newPhaseName').value.trim();
       if (!name) return;
-      await DataService.addPhase(name);
+      if (await act(() => DataService.addPhase(name)) === null) return;
       $('#newPhaseName').value = '';
       render();
       App.refreshDropdowns();
+    });
+
+    // Backup: every table as JSON, to keep outside Supabase.
+    // Restore with tools/restore.html, check with tools/compare.html.
+    $('#btnBackup').addEventListener('click', async () => {
+      const btn = $('#btnBackup');
+      btn.disabled = true;
+      const backup = await act(() => DataService.exportBackup(), 'Backup lukte niet. Er is niets gedownload.');
+      btn.disabled = false;
+      if (backup === null) return;
+      const stamp = backup.createdAt.slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      download(JSON.stringify(backup, null, 1), 'application/json', `jatl-backup-${stamp}.json`);
+      const c = backup.counts;
+      toast(`Backup: ${c.entries} registraties, ${c.customers} klanten, ${c.projects} projecten`, 4000);
     });
   }
 

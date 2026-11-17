@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JATL · Backup terugzetten</title>
+<!--
+  JATL restore - makes the SQL to put a backup back, to paste in the Supabase SQL Editor.
+
+  Responsibilities:
+    - Read the backup to restore and a fresh backup of the database as it is now
+    - Show per table what comes back and what gets lost, before any SQL exists
+    - Build the SQL (logic in backup-core.js) and offer it to copy or download
+
+  Runs in the browser only. Nothing is sent anywhere; this page never talks to Supabase.
+-->
+<style>
+  :root {
+    --bg: #1b1b1f; --surface: #26262a; --border: #3e3e46;
+    --text: #F5F4F0; --text-muted: #b5b5b9; --accent: #c4c71e;
+    --danger: #c45c5c; --danger-dim: rgba(196, 92, 92, 0.12); --success: #5ca67a;
+    --radius: 10px; --radius-sm: 6px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); padding: 24px 16px 64px; line-height: 1.45; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+  .lead { color: var(--text-muted); margin-bottom: 24px; }
+  .step { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .step.locked { opacity: .45; pointer-events: none; }
+  .hint { color: var(--text-muted); font-size: 14px; margin-bottom: 12px; }
+  .drop { border: 1.5px dashed var(--border); border-radius: var(--radius-sm); padding: 18px; text-align: center; color: var(--text-muted); cursor: pointer; }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  .meta { font-size: 14px; margin-top: 10px; }
+  .err { color: var(--danger); font-size: 14px; margin-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .lost { color: var(--danger); font-weight: 600; }
+  .ok { color: var(--success); }
+  .warn { background: var(--danger-dim); color: var(--text); border-radius: var(--radius-sm); padding: 12px; margin-top: 12px; font-size: 14px; }
+  button { font-family: var(--font); font-size: 15px; font-weight: 600; border: none; border-radius: var(--radius-sm); padding: 12px 16px; cursor: pointer; background: var(--accent); color: var(--bg); }
+  button.subtle { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); font-weight: 500; }
+  button:disabled { opacity: .45; cursor: default; }
+  label.check { display: flex; gap: 8px; align-items: flex-start; margin: 12px 0; font-size: 14px; }
+  textarea { width: 100%; height: 200px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 12px ui-monospace, Menlo, monospace; padding: 8px; margin: 12px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  ol { padding-left: 20px; font-size: 14px; color: var(--text-muted); }
+  ol li { margin-bottom: 4px; }
+  code { font: 13px ui-monospace, Menlo, monospace; color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Backup terugzetten</h1>
+  <p class="lead">Deze pagina maakt de SQL om een backup terug te zetten. Ze praat zelf niet met de database en verstuurt niets. Jij plakt de SQL in Supabase.</p>
+
+  <section class="step" id="step1">
+    <h2>1. De backup die terug moet</h2>
+    <p class="hint">Het bestand <code>jatl-backup-….json</code> met de toestand waarnaar je terug wil.</p>
+    <label class="drop" id="dropRestore"><input type="file" accept=".json,application/json">Sleep het bestand hierheen of klik om te kiezen</label>
+    <div id="infoRestore"></div>
+  </section>
+
+  <section class="step locked" id="step2">
+    <h2>2. Een backup van nu</h2>
+    <p class="hint">Download in JATL bij Beheer eerst een verse backup en zet die hier. Zo zie je wat je zou verliezen, en heb je meteen een weg terug als het terugzetten niet is wat je wou.</p>
+    <label class="drop" id="dropNow"><input type="file" accept=".json,application/json">Sleep de backup van nu hierheen of klik om te kiezen</label>
+    <div id="infoNow"></div>
+  </section>
+
+  <section class="step locked" id="step3">
+    <h2>3. Wat er verandert</h2>
+    <div id="diff"></div>
+    <label class="check"><input type="checkbox" id="understand"> <span>Ik begrijp dat alles in de database vervangen wordt door de backup uit stap 1, en ik heb de backup van nu bewaard op een plek buiten Supabase.</span></label>
+    <button id="btnMake" disabled>SQL maken</button>
+  </section>
+
+  <section class="step locked" id="step4">
+    <h2>4. Uitvoeren in Supabase</h2>
+    <ol>
+      <li>Open je project in Supabase, ga naar <b>SQL Editor</b> en kies <b>New query</b>.</li>
+      <li>Plak de SQL en klik op <b>Run</b>. Supabase waarschuwt voor een destructieve actie: bevestig.</li>
+      <li>Onderaan verschijnt een verslag met de aantallen. Faalt er iets, dan zie je een fout en is er niets veranderd.</li>
+      <li>Download daarna in JATL een nieuwe backup en vergelijk die met de backup uit stap 1 in <code>compare.html</code>. Elke tabel hoort "gelijk" te tonen.</li>
+    </ol>
+    <textarea id="sql" readonly></textarea>
+    <div class="row">
+      <button id="btnCopy">Kopiëren</button>
+      <button class="subtle" id="btnDownload">Download als .sql</button>
+    </div>
+  </section>
+</main>
+
+<script src="backup-core.js"></script>
+<script>
+  const { validateBackup, compareBackups, buildRestoreSql, TABLES } = JatlBackup;
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const NAMES = { customers: 'Klanten', projects: 'Projecten', phases: 'Fases', members: 'Leden', entries: 'Registraties' };
+
+  let toRestore = null, now = null, sqlText = '';
+
+  function bindDrop(el, onFile) {
+    const input = el.querySelector('input');
+    input.addEventListener('change', () => input.files[0] && onFile(input.files[0]));
+    el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('over'); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0]); });
+  }
+
+  async function readBackup(file, infoEl) {
+    try {
+      const b = JSON.parse(await file.text());
+      const v = validateBackup(b);
+      if (!v.ok) { infoEl.innerHTML = `<div class="err">${v.errors.map(esc).join('<br>')}</div>`; return null; }
+      infoEl.innerHTML = `<div class="meta"><b>${esc(file.name)}</b><br>
+        Gemaakt ${esc(new Date(b.createdAt).toLocaleString('nl-BE'))} door ${esc(b.createdBy || '?')} · schemaversie ${esc(b.schemaVersion)}<br>
+        ${TABLES.map(t => `${b.tables[t].length} ${NAMES[t].toLowerCase()}`).join(' · ')}</div>`;
+      return b;
+    } catch (e) {
+      infoEl.innerHTML = `<div class="err">Dit bestand kan ik niet lezen als JSON.</div>`;
+      return null;
+    }
+  }
+
+  function lock(id, locked) { $(id).classList.toggle('locked', locked); }
+
+  function showDiff() {
+    // "before" = now, "after" = backup: what disappears from now, what comes back from the backup.
+    const r = compareBackups(now, toRestore);
+    let lostTotal = 0;
+    const rows = TABLES.map(t => {
+      const x = r[t];
+      // Members are never deleted by the restore, so "missing" members stay.
+      const lost = t === 'members' ? 0 : x.missing.length;
+      lostTotal += lost + (t === 'members' ? 0 : x.changed.length);
+      return `<tr><td>${NAMES[t]}</td>
+        <td class="num">${x.before}</td><td class="num">${x.after}</td>
+        <td class="num">${x.added.length}</td>
+        <td class="num ${x.changed.length ? 'lost' : ''}">${x.changed.length}</td>
+        <td class="num ${lost ? 'lost' : ''}">${t === 'members' ? '–' : lost}</td></tr>`;
+    }).join('');
+    const sameSource = now.source && toRestore.source && now.source !== toRestore.source
+      ? `<div class="warn">De twee backups komen uit een ander Supabase-project (${esc(toRestore.source)} en ${esc(now.source)}). Leden worden dan via e-mailadres gekoppeld.</div>` : '';
+    const older = new Date(now.createdAt) < new Date(toRestore.createdAt)
+      ? `<div class="warn">De "backup van nu" is ouder dan de backup die terug moet. Klopt dat wel?</div>` : '';
+    $('#diff').innerHTML = `<table>
+        <tr><th></th><th class="num">Nu</th><th class="num">Backup</th><th class="num">Komt terug</th><th class="num">Gewijzigd → oude versie</th><th class="num">Verdwijnt</th></tr>
+        ${rows}
+      </table>
+      ${lostTotal === 0 ? '<p class="ok" style="margin-top:10px">Er gaat niets verloren: de database bevat niets wat niet in de backup staat.</p>'
+        : `<div class="warn"><b>${lostTotal} rijen</b> uit de database van nu verdwijnen of krijgen hun oude waarde terug. Ze staan wel nog in je backup van nu.</div>`}
+      ${sameSource}${older}`;
+  }
+
+  function refresh() {
+    lock('#step2', !toRestore);
+    const ready = toRestore && now;
+    lock('#step3', !ready);
+    if (ready) showDiff();
+    $('#btnMake').disabled = !(ready && $('#understand').checked);
+    if (!ready) lock('#step4', true);
+  }
+
+  bindDrop($('#dropRestore'), async f => { toRestore = await readBackup(f, $('#infoRestore')); refresh(); });
+  bindDrop($('#dropNow'), async f => { now = await readBackup(f, $('#infoNow')); refresh(); });
+  $('#understand').addEventListener('change', refresh);
+
+  $('#btnMake').addEventListener('click', () => {
+    try {
+      sqlText = buildRestoreSql(toRestore);
+      $('#sql').value = sqlText;
+      lock('#step4', false);
+      $('#step4').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+      $('#diff').insertAdjacentHTML('beforeend', `<div class="err">${esc(e.message)}</div>`);
+    }
+  });
+
+  $('#btnCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(sqlText); $('#btnCopy').textContent = 'Gekopieerd'; }
+    catch { $('#sql').select(); document.execCommand('copy'); $('#btnCopy').textContent = 'Gekopieerd'; }
+    setTimeout(() => $('#btnCopy').textContent = 'Kopiëren', 1500);
+  });
+
+  $('#btnDownload').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([sqlText], { type: 'text/plain' }));
+    a.download = `jatl-restore-${(toRestore.createdAt || '').slice(0, 10)}.sql`;
+    a.click();
+  });
+</script>
+</body>
+</html>
