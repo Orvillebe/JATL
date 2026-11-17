@@ -14,6 +14,11 @@
 // A backup carries this number; tools/restore.html refuses a mismatch.
 const JATL_SCHEMA_VERSION = 0;
 
+// Where the live app runs (GitHub Pages). Any other address shows a red warning banner,
+// because this file always talks to the real database.
+// Assumption: JATL is served at https://orvillebe.github.io/JATL/. Add a custom domain here if you use one.
+const LIVE_HOSTS = ['orvillebe.github.io'];
+
 const SUPABASE_URL = 'https://pqbxqsunkbuvxlvvjbnp.supabase.co';       // e.g. https://xxxxx.supabase.co
 const SUPABASE_ANON_KEY = 'sb_publishable_P_C445o2GHbvR1rYnJFPBQ_6DRvQBF8';       // e.g. eyJhbGciOi...
 
@@ -333,10 +338,23 @@ const DataService = (() => {
   }
 
   // =====================
+  // ENVIRONMENT (shown as a banner by app.js)
+  // =====================
+
+  // kind: 'live'      - real database on the live address: no banner
+  //       'elsewhere' - real database, but opened from another address (localhost, file): red warning
+  //       'mock'      - fake data in the browser (tests/mock): yellow banner
+  const environment = {
+    kind: LIVE_HOSTS.includes(location.hostname) ? 'live' : 'elsewhere',
+    host: location.host || location.protocol
+  };
+
+  // =====================
   // PUBLIC API
   // =====================
 
   return {
+    environment,
     signIn, signOut, getSession, onAuthStateChange,
     getMembers, updateMemberName,
     getCustomers, addCustomer, removeCustomer,

@@ -727,3 +727,31 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 }
 
 .btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- ENVIRONMENT BANNER ---- */
+/* Never closable: you can only open it for more text. Striped so it cannot be mistaken for content. */
+
+.env-banner {
+  position: sticky;
+  top: 0;
+  z-index: 101;
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: pointer;
+  user-select: none;
+}
+.env-banner-inner { max-width: 480px; margin: 0 auto; padding: 6px 12px; }
+.env-banner-title { font-weight: 700; letter-spacing: 0.06em; display: flex; justify-content: space-between; gap: 8px; }
+.env-banner-more { font-weight: 500; letter-spacing: 0; opacity: 0.8; white-space: nowrap; }
+.env-banner-text { display: none; margin-top: 4px; font-weight: 400; }
+.env-banner.open .env-banner-text { display: block; }
+.env-banner code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: rgba(0,0,0,0.18); padding: 0 4px; border-radius: 3px; }
+
+.env-banner.env-mock {
+  color: var(--bg);
+  background: repeating-linear-gradient(135deg, var(--accent) 0 14px, #b3b61a 14px 28px);
+}
+.env-banner.env-elsewhere {
+  color: #fff;
+  background: repeating-linear-gradient(135deg, #b03a3a 0 14px, #8e2b2b 14px 28px);
+}

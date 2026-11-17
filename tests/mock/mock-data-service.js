@@ -72,6 +72,7 @@ const DataService = (() => {
   const session = { user: { id: MOCK.me, email: 'an@example.com' } };
 
   return {
+    environment: { kind: 'mock', host: location.host },
     async signIn() { listener && listener(session); return { session }; },
     async signOut() { listener && listener(null); },
     async getSession() { return session; },

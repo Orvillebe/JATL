@@ -91,7 +91,7 @@ test('sqlLiteral doubles quotes and leaves backslashes', () => {
 
 test('CSV: every field quoted, quotes doubled, formulas neutralised', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'data-service.js'), 'utf8');
-  const ctx = { window: { supabase: { createClient: () => ({}) } }, localStorage: {} };
+  const ctx = { window: { supabase: { createClient: () => ({}) } }, localStorage: {}, location: { hostname: 'x', host: 'x' } };
   vm.createContext(ctx);
   vm.runInContext(src + '\nthis.DataService = DataService;', ctx);
   const f = ctx.DataService.csvField;
@@ -102,4 +102,17 @@ test('CSV: every field quoted, quotes doubled, formulas neutralised', () => {
   assert.equal(f('@x'), `"'@x"`);
   assert.equal(f(null), '""');
   assert.equal(f(90), '"90"');
+});
+
+test('environment: no banner on the live address, red warning anywhere else', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'data-service.js'), 'utf8');
+  const kindOn = (hostname, host = hostname, protocol = 'https:') => {
+    const ctx = { window: { supabase: { createClient: () => ({}) } }, localStorage: {}, location: { hostname, host, protocol } };
+    vm.createContext(ctx);
+    vm.runInContext(src + '\nthis.DataService = DataService;', ctx);
+    return ctx.DataService.environment.kind;
+  };
+  assert.equal(kindOn('orvillebe.github.io'), 'live');
+  assert.equal(kindOn('localhost', 'localhost:8000'), 'elsewhere');
+  assert.equal(kindOn('', '', 'file:'), 'elsewhere');
 });

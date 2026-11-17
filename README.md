@@ -57,6 +57,7 @@ The restore only accepts schema version 0 (the current `schema.sql`). Release 2 
 ## Testing
 
 - `node --test tests/*.test.js` - backup, compare, restore SQL and CSV quoting.
+- A striped banner at the top tells you where you are. Yellow *TESTOMGEVING · NEP-DATA*: mock data, nothing reaches the database. Red *LET OP · ECHTE DATABASE*: the real database opened from an address other than the live one (localhost, a file); what you save there is real. No banner: the live app. The live address is `LIVE_HOSTS` in `data-service.js`.
 - `node tests/mock/serve.js`, then open http://localhost:5174 - the full app with an in-memory mock (`tests/mock/mock-data-service.js`) instead of Supabase. 1400+ entries and names with `< & " '`. In the browser console, `MOCK.failAfter = 1` makes the second next write fail, to see how the app handles a dropped connection. The real database is never contacted.
 
 ## Releasing

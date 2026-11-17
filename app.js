@@ -1019,7 +1019,7 @@ const Manage = (() => {
    ============================================= */
 
 const App = (() => {
-  const { $, $$ } = Helpers;
+  const { $, $$, esc } = Helpers;
 
   let currentUserId = null;
   let weekOffset = 0;
@@ -1051,7 +1051,48 @@ const App = (() => {
     Register.populateDropdowns(weekOffset);
   }
 
+  // Banner that says where you are and whose data you touch. What the environment is,
+  // is decided in DataService.environment; this only shows it.
+  function showEnvironment() {
+    const env = DataService.environment || { kind: 'live' };
+    const banner = $('#envBanner');
+    const texts = {
+      mock: {
+        title: 'TESTOMGEVING · NEP-DATA',
+        text: `Je werkt met verzonnen data die alleen in dit browservenster bestaat. Niets komt in de echte database.
+          Herladen zet alles terug zoals het was. Een wegvallende verbinding nabootsen: tik <code>MOCK.failAfter = 1</code> in de console.`
+      },
+      elsewhere: {
+        title: 'LET OP · ECHTE DATABASE',
+        text: `Je opent JATL vanaf <b>${esc(env.host)}</b>, niet vanaf het live adres. Toch werkt deze versie met de echte data:
+          wat je hier bewaart of verwijdert, gebeurt echt, ook voor je collega's.
+          Testen doe je met nep-data: <code>node tests/mock/serve.js</code>.`
+      }
+    };
+    const t = texts[env.kind];
+    if (!t) return; // live: no banner
+    banner.className = `env-banner env-${env.kind}`;
+    banner.innerHTML = `<div class="env-banner-inner">
+        <div class="env-banner-title"><span>${t.title}</span><span class="env-banner-more">uitleg ▾</span></div>
+        <div class="env-banner-text">${t.text}</div>
+      </div>`;
+    banner.hidden = false;
+    banner.addEventListener('click', () => {
+      banner.classList.toggle('open');
+      banner.querySelector('.env-banner-more').textContent = banner.classList.contains('open') ? 'sluiten ▴' : 'uitleg ▾';
+      placeHeader();
+    });
+    document.title = `[${env.kind === 'mock' ? 'TEST' : 'ECHT · LOKAAL'}] ${document.title}`;
+
+    // The header is sticky too: keep it just below the banner.
+    const placeHeader = () => { const h = $('.header'); if (h) h.style.top = `${banner.offsetHeight}px`; };
+    placeHeader();
+    window.addEventListener('resize', placeHeader);
+  }
+
   function init() {
+    showEnvironment();
+
     // Check existing session on load
     DataService.getSession().then(session => {
       if (session) {
