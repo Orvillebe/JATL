@@ -116,8 +116,6 @@ const DataService = (() => {
     async updateEntry() { throw new Error('not used'); },
     async removeEntry(id) { await write(); db.entries = db.entries.filter(e => e.id !== id); },
 
-    getRecentProject() { try { return JSON.parse(localStorage.getItem('jatl_mock_recent')) || null; } catch { return null; } },
-    setRecentProject(v) { try { localStorage.setItem('jatl_mock_recent', JSON.stringify(v)); } catch {} },
 
     csvField(v) { let s = String(v ?? ''); if (/^[=+\-@]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; },
     async exportCSV(f = {}) {

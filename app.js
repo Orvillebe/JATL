@@ -155,12 +155,19 @@ const Register = (() => {
 
     highlightToday(weekOffset);
 
-    const recent = DataService.getRecentProject();
-    if (recent) {
-      custSel.value = recent.customerId;
-      await updateProjectDropdown();
-      $('#entryProject').value = recent.projectId;
-      $('#entryPhase').value = recent.phase;
+    // Customer and project always start at "Kies...", also after a tab switch or a change in Manage.
+    // The customer list was just rebuilt, so the project list must follow, or a project could stay
+    // selected without a customer.
+    await updateProjectDropdown();
+
+    // A half-done edit cannot survive this: without its customer and project, saving would turn the
+    // edited hours into a new entry. Leave edit mode and empty the form.
+    if (editingIds) {
+      clearEditMode();
+      $$('.day-input').forEach(inp => inp.value = '');
+      $('#entryNote').value = '';
+      $('#noteField').classList.remove('visible');
+      $('#noteToggle').textContent = '+ notitie';
     }
   }
 
@@ -253,7 +260,6 @@ const Register = (() => {
     }
 
     clearEditMode();
-    DataService.setRecentProject({ customerId, projectId, phase });
 
     dayInputs.forEach(inp => inp.value = '');
     $('#entryNote').value = '';

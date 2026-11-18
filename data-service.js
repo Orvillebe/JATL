@@ -268,20 +268,6 @@ const DataService = (() => {
   }
 
   // =====================
-  // LOCAL PREFERENCES (always localStorage)
-  // =====================
-
-  function getRecentProject() {
-    try {
-      return JSON.parse(localStorage.getItem('jatl_recent_project')) || null;
-    } catch { return null; }
-  }
-
-  function setRecentProject({ customerId, projectId, phase }) {
-    localStorage.setItem('jatl_recent_project', JSON.stringify({ customerId, projectId, phase }));
-  }
-
-  // =====================
   // EXPORT
   // =====================
 
@@ -362,7 +348,6 @@ const DataService = (() => {
     getPhases, addPhase, removePhase,
     getEntries, addEntry, updateEntry, removeEntry,
     getReport,
-    getRecentProject, setRecentProject,
     exportCSV, exportBackup, csvField
   };
 })();
